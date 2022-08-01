@@ -1,0 +1,52 @@
+log:
+  level: debug
+  file_path: /data/authelia.log
+
+theme: dark
+
+authentication_backend:
+  file:
+    path: /config/users_database.yml
+
+session:
+  domain: example.com
+  secret: "" # set by docker compose
+  
+jwt_secret: "" # set by docker compose
+
+storage:
+  local:
+    path: /data/authelia.sqlite3
+
+totp:
+  issuer: example.com
+
+access_control:
+  default_policy: deny
+  rules:
+    - domain:
+        - bazarr.example.com
+        - radarr.example.com
+        - sonarr.example.com
+        - jackett.example.com
+      resources:
+        - '^/api.*$'
+      policy: bypass
+    - domain: "*.example.com"
+      subject:
+        - group:admins
+      policy: two_factor
+
+duo_api:
+  hostname: "" # !change this to the value in your Duo app dashboard!
+  integration_key: "" # !change this to the value in your Duo app dashboard!
+  secret_key: "" # set by docker compose
+
+regulation: 
+  max_retries: 3
+  find_time: 120
+  ban_time: 300
+
+notifier:
+  filesystem:
+    filename: /tmp/authelia/notification.txt

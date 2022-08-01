@@ -1,0 +1,306 @@
+version: "3.2"
+
+services:
+  traefik:
+    image: traefik:latest
+    container_name: traefik
+    depends_on:
+      - dockersock-proxy
+    command: 
+      - "--api"
+      - "--certificatesResolvers.default.acme.email=${ACME_EMAIL}"
+      - "--providers.docker.defaultRule=Host(`{{ trimSuffix `-config` .Name }}.${DOMAIN_BASE}"
+    networks:
+      - web
+      - default
+      - dockersock-traefik-proxy
+    ports:
+      - 80:80
+      - 443:443
+      - 8080:8080
+    labels:
+      - "traefik.docker.network=web"
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik-secured.middlewares=authelia@docker"
+      - "traefik.http.services.traefik.loadbalancer.server.port=8080"
+      - "com.centurylinklabs.watchtower.enable=true"
+      - "domain-base=${DOMAIN_BASE}"
+    volumes:
+      - ${PERSISTENT_DIR}/traefik/traefik.yml:/traefik.yml
+      - ${PERSISTENT_DIR}/traefik/acme.json:/acme.json
+      - ${PERSISTENT_DIR}/traefik/log:/var/log
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+    
+  dockersock-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: dockersock-proxy
+    environment:
+      - CONTAINERS=1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - dockersock-traefik-proxy
+    ports:
+      - 2375
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    restart: unless-stopped
+
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: watchtower
+    command: --interval 43200 --label-enable --cleanup
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    restart: unless-stopped
+
+  fail2ban:
+    image: crazymax/fail2ban:latest
+    container_name: fail2ban
+    network_mode: "host"
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    volumes:
+      - ${PERSISTENT_DIR}/traefik/log:/var/log:ro
+      - ${PERSISTENT_DIR}/fail2ban/data:/data
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    restart: unless-stopped
+    
+  login:
+    image: authelia/authelia:latest
+    container_name: authelia
+    depends_on:
+      - traefik
+    networks:
+      - web
+    environment:
+      - NODE_TLS_REJECT_UNAUTHORIZED=1
+      - AUTHELIA_SESSION_SECRET_FILE=/config/secrets/session.txt
+      - AUTHELIA_JWT_SECRET_FILE=/config/secrets/jwt.txt
+      - AUTHELIA_DUO_API_SECRET_KEY_FILE=/config/secrets/duo.txt
+      - AUTHELIA_STORAGE_ENCRYPTION_KEY_FILE=/config/secrets/encryption.txt
+    volumes:
+      - ${PERSISTENT_DIR}/authelia/configuration.yml:/config/configuration.yml
+      - ${PERSISTENT_DIR}/authelia/users_database.yml:/config/users_database.yml
+      - ${PERSISTENT_DIR}/authelia/secrets:/config/secrets
+      - ${PERSISTENT_DIR}/authelia/data:/data
+      - ${PERSISTENT_DIR}/authelia/tmp:/tmp/authelia
+    expose:
+      - 9091
+    labels:
+      - "traefik.http.routers.authelia.entrypoints=http"
+      - "traefik.http.routers.authelia-secured.entrypoints=https"
+      - "traefik.http.routers.authelia-secured.tls=true"
+      - "traefik.http.middlewares.authelia.forwardauth.address=http://authelia:9091/api/verify?rd=https://login.${DOMAIN_BASE}/"
+      - "traefik.http.middlewares.authelia.forwardauth.trustForwardHeader=true"
+      - "traefik.http.middlewares.authelia.forwardauth.authResponseHeaders=Remote-User, Remote-Groups, Remote-Name, Remote-Email"
+      - "traefik.docker.network=web"
+      - "traefik.enable=true"
+      - "com.centurylinklabs.watchtower.enable=true"
+      - "traefik.http.services.authelia.loadbalancer.server.port=9091"
+      - "domain-base=${DOMAIN_BASE}"
+    restart: unless-stopped
+    
+  portainer:
+    image: portainer/portainer:1.24.1
+    container_name: portainer
+    depends_on:
+      - traefik
+      - login
+    networks:
+      - web
+    command: --no-auth
+    ports:
+      - 9000:9000
+      - 8000:8000
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${PERSISTENT_DIR}/portainer/data:/data
+    labels:
+      - "traefik.docker.network=web"
+      - "traefik.enable=true"
+      - "traefik.http.routers.portainer-secured.middlewares=authelia@docker"
+      - "traefik.http.services.portainer.loadbalancer.server.port=9000"
+      - "com.centurylinklabs.watchtower.enable=true"
+      - "domain-base=${DOMAIN_BASE}"
+    restart: unless-stopped
+
+  jackett:
+    image: ghcr.io/linuxserver/jackett:latest
+    container_name: jackett
+    depends_on:
+      - traefik
+      - login
+    networks:
+      - web
+    ports:
+      - 9117:9117
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - ${PERSISTENT_DIR}/jackett/config:/config
+      - ${PERSISTENT_DIR}/jackett/downloads:/downloads
+    labels:
+      - "traefik.http.services.jackett.loadbalancer.server.port=9117"
+      - "traefik.http.routers.jackett-secured.middlewares=authelia@docker"
+      - "traefik.docker.network=web"
+      - "traefik.enable=true"
+      - "com.centurylinklabs.watchtower.enable=true"
+      - "domain-base=${DOMAIN_BASE}"
+    restart: unless-stopped
+    
+  sonarr:
+    image: ghcr.io/linuxserver/sonarr:latest
+    container_name: sonarr
+    depends_on:
+      - traefik
+      - jackett
+      - torrent
+    networks:
+      - web
+    ports:
+      - 8989:8989
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - ${PERSISTENT_DIR}/sonarr/config:/config
+      - ${DOWNLOAD_DIR}:/downloads
+      - ${TVSHOWS_DIR}:/tvshows
+      - ${TRANSCODES_DIR}:/transcodes
+    labels:
+      - "traefik.http.services.sonarr.loadbalancer.server.port=8989"
+      - "traefik.http.routers.sonarr-secured.middlewares=authelia@docker"
+      - "traefik.docker.network=web"
+      - "traefik.enable=true"
+      - "com.centurylinklabs.watchtower.enable=true"
+      - "domain-base=${DOMAIN_BASE}"
+    restart: unless-stopped
+    
+  radarr:
+    image: ghcr.io/linuxserver/radarr:latest
+    container_name: radarr
+    depends_on:
+      - traefik
+      - jackett
+      - torrent
+    networks:
+      - web
+    ports:
+      - 7878:7878
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - ${PERSISTENT_DIR}/radarr/config:/config
+      - ${DOWNLOAD_DIR}:/downloads
+      - ${MOVIES_DIR}:/movies
+      - ${TRANSCODES_DIR}:/transcodes
+    labels:
+      - "traefik.http.services.radarr.loadbalancer.server.port=7878"
+      - "traefik.http.routers.radarr-secured.middlewares=authelia@docker"
+      - "traefik.docker.network=web"
+      - "traefik.enable=true"
+      - "com.centurylinklabs.watchtower.enable=true"
+      - "domain-base=${DOMAIN_BASE}"
+    restart: unless-stopped
+    
+  bazarr:
+    image: ghcr.io/linuxserver/bazarr:latest
+    container_name: bazarr
+    depends_on:
+      - traefik
+    networks:
+      - web
+    ports:
+      - 6767:6767
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - ${PERSISTENT_DIR}/bazarr/config:/config
+      - ${MOVIES_DIR}:/movies
+      - ${TVSHOWS_DIR}:/tvshows
+    labels:
+      - "traefik.http.services.bazarr.loadbalancer.server.port=6767"
+      - "traefik.http.routers.bazarr-secured.middlewares=authelia@docker"
+      - "traefik.docker.network=web"
+      - "traefik.enable=true"
+      - "com.centurylinklabs.watchtower.enable=true"
+      - "domain-base=${DOMAIN_BASE}"
+    restart: unless-stopped
+    
+  torrent:
+    image: ghcr.io/linuxserver/qbittorrent
+    container_name: qbittorrent
+    depends_on:
+      - traefik
+    networks:
+      - web
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+      - UMASK=022
+      - WEBUI_PORT=8181
+    volumes:
+      - ${PERSISTENT_DIR}/qbittorrent/config:/config
+      - ${DOWNLOAD_DIR}:/downloads
+    ports:
+      - 6881:6881
+      - 6881:6881/udp
+      - 8181:8181
+    labels:
+      - "traefik.http.services.torrent.loadbalancer.server.port=8181"
+      - "traefik.docker.network=web"
+      - "traefik.enable=true"
+      - "com.centurylinklabs.watchtower.enable=true"
+      - "domain-base=${DOMAIN_BASE}"
+    restart: unless-stopped
+    
+  jellyfin:
+    image: ghcr.io/linuxserver/jellyfin
+    container_name: jellyfin
+    depends_on:
+      - traefik
+    networks:
+      - web
+    ports:
+      - 8096:8096
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - ${PERSISTENT_DIR}/jellyfin/config:/config
+      - ${MOVIES_DIR}:/data/movies
+      - ${PHOTO_DIR}:/data/pictures
+      - ${TVSHOWS_DIR}:/data/tvshows
+    labels:
+      - "traefik.http.services.jellyfin.loadbalancer.server.port=8096"
+      - "traefik.docker.network=web"
+      - "traefik.enable=true"
+      - "com.centurylinklabs.watchtower.enable=true"
+      - "domain-base=${DOMAIN_BASE}"
+    restart: unless-stopped
+    
+networks:
+  web:
+    external: true
+  dockersock-traefik-proxy:
+  default:
+    driver: bridge
