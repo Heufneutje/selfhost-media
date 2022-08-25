@@ -1,5 +1,5 @@
 users:
-  stefan:
+  example_username:
     displayname: "" # set manually here
     password: "" # use https://www.authelia.com/reference/cli/authelia/authelia_hash-password/
     email: example@example.com
