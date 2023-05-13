@@ -70,7 +70,7 @@ services:
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
     restart: unless-stopped
-    
+
   login:
     image: authelia/authelia:latest
     container_name: authelia
@@ -105,31 +105,30 @@ services:
       - "traefik.http.services.authelia.loadbalancer.server.port=9091"
       - "domain-base=${DOMAIN_BASE}"
     restart: unless-stopped
-    
-  portainer:
-    image: portainer/portainer:1.24.1
-    container_name: portainer
+
+  dashboard:
+    image: selfhostedpro/yacht:latest
+    container_name: yacht
     depends_on:
       - traefik
       - login
     networks:
       - web
-    command: --no-auth
     ports:
-      - 9000:9000
-      - 8000:8000
+      - 9000:8000
     environment:
       - PUID=${PUID}
       - PGID=${PGID}
       - TZ=${TZ}
+      - DISABLE_AUTH=True
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ${PERSISTENT_DIR}/portainer/data:/data
+      - ${PERSISTENT_DIR}/yacht/config:/config
     labels:
       - "traefik.docker.network=web"
       - "traefik.enable=true"
-      - "traefik.http.routers.portainer-secured.middlewares=authelia@docker"
-      - "traefik.http.services.portainer.loadbalancer.server.port=9000"
+      - "traefik.http.routers.yacht-secured.middlewares=authelia@docker"
+      - "traefik.http.services.yacht.loadbalancer.server.port=8000"
       - "com.centurylinklabs.watchtower.enable=true"
       - "domain-base=${DOMAIN_BASE}"
     restart: unless-stopped
@@ -159,91 +158,7 @@ services:
       - "com.centurylinklabs.watchtower.enable=true"
       - "domain-base=${DOMAIN_BASE}"
     restart: unless-stopped
-    
-  sonarr:
-    image: ghcr.io/linuxserver/sonarr:latest
-    container_name: sonarr
-    depends_on:
-      - traefik
-      - jackett
-      - torrent
-    networks:
-      - web
-    ports:
-      - 8989:8989
-    environment:
-      - PUID=${PUID}
-      - PGID=${PGID}
-      - TZ=${TZ}
-    volumes:
-      - ${PERSISTENT_DIR}/sonarr/config:/config
-      - ${DOWNLOAD_DIR}:/downloads
-      - ${TVSHOWS_DIR}:/tvshows
-      - ${TRANSCODES_DIR}:/transcodes
-    labels:
-      - "traefik.http.services.sonarr.loadbalancer.server.port=8989"
-      - "traefik.http.routers.sonarr-secured.middlewares=authelia@docker"
-      - "traefik.docker.network=web"
-      - "traefik.enable=true"
-      - "com.centurylinklabs.watchtower.enable=true"
-      - "domain-base=${DOMAIN_BASE}"
-    restart: unless-stopped
-    
-  radarr:
-    image: ghcr.io/linuxserver/radarr:latest
-    container_name: radarr
-    depends_on:
-      - traefik
-      - jackett
-      - torrent
-    networks:
-      - web
-    ports:
-      - 7878:7878
-    environment:
-      - PUID=${PUID}
-      - PGID=${PGID}
-      - TZ=${TZ}
-    volumes:
-      - ${PERSISTENT_DIR}/radarr/config:/config
-      - ${DOWNLOAD_DIR}:/downloads
-      - ${MOVIES_DIR}:/movies
-      - ${TRANSCODES_DIR}:/transcodes
-    labels:
-      - "traefik.http.services.radarr.loadbalancer.server.port=7878"
-      - "traefik.http.routers.radarr-secured.middlewares=authelia@docker"
-      - "traefik.docker.network=web"
-      - "traefik.enable=true"
-      - "com.centurylinklabs.watchtower.enable=true"
-      - "domain-base=${DOMAIN_BASE}"
-    restart: unless-stopped
-    
-  bazarr:
-    image: ghcr.io/linuxserver/bazarr:latest
-    container_name: bazarr
-    depends_on:
-      - traefik
-    networks:
-      - web
-    ports:
-      - 6767:6767
-    environment:
-      - PUID=${PUID}
-      - PGID=${PGID}
-      - TZ=${TZ}
-    volumes:
-      - ${PERSISTENT_DIR}/bazarr/config:/config
-      - ${MOVIES_DIR}:/movies
-      - ${TVSHOWS_DIR}:/tvshows
-    labels:
-      - "traefik.http.services.bazarr.loadbalancer.server.port=6767"
-      - "traefik.http.routers.bazarr-secured.middlewares=authelia@docker"
-      - "traefik.docker.network=web"
-      - "traefik.enable=true"
-      - "com.centurylinklabs.watchtower.enable=true"
-      - "domain-base=${DOMAIN_BASE}"
-    restart: unless-stopped
-    
+
   torrent:
     image: ghcr.io/linuxserver/qbittorrent
     container_name: qbittorrent
@@ -260,6 +175,8 @@ services:
     volumes:
       - ${PERSISTENT_DIR}/qbittorrent/config:/config
       - ${DOWNLOAD_DIR}:/downloads
+      - ${WORK_DIR}:/workdir
+      - ${TRANSCODES_DIR}:/transcodes
     ports:
       - 6881:6881
       - 6881:6881/udp
@@ -271,7 +188,40 @@ services:
       - "com.centurylinklabs.watchtower.enable=true"
       - "domain-base=${DOMAIN_BASE}"
     restart: unless-stopped
-    
+
+  transcode:
+    image: jlesage/handbrake:latest
+    container_name: handbrake
+    depends_on:
+      - traefik
+      - login
+    networks:
+      - web
+    devices:
+      - /dev/dri
+    ports:
+      - 5800:5800
+    environment:
+      - USER_ID=${PUID}
+      - GROUP_ID=${PGID}
+      - TZ=${TZ}
+      - AUTOMATED_CONVERSION=1
+      - AUTOMATED_CONVERSION_PRESET=${HANDBRAKE_PRESET}
+      - AUTOMATED_CONVERSION_FORMAT=${HANDBRAKE_FORMAT}
+      - AUTOMATED_CONVERSION_KEEP_SOURCE=1
+    volumes:
+      - ${PERSISTENT_DIR}/handbrake/config:/config
+      - ${DOWNLOAD_DIR}:/watch
+      - ${TRANSCODES_DIR}:/output
+    labels:
+      - "traefik.http.services.handbrake.loadbalancer.server.port=5800"
+      - "traefik.http.routers.handbrake-secured.middlewares=authelia@docker"
+      - "traefik.docker.network=web"
+      - "traefik.enable=true"
+      - "com.centurylinklabs.watchtower.enable=true"
+      - "domain-base=${DOMAIN_BASE}"
+    restart: unless-stopped
+
   jellyfin:
     image: ghcr.io/linuxserver/jellyfin
     container_name: jellyfin
@@ -279,6 +229,8 @@ services:
       - traefik
     networks:
       - web
+    devices:
+      - /dev/dri
     ports:
       - 8096:8096
     environment:
@@ -287,9 +239,11 @@ services:
       - TZ=${TZ}
     volumes:
       - ${PERSISTENT_DIR}/jellyfin/config:/config
-      - ${MOVIES_DIR}:/data/movies
-      - ${PHOTO_DIR}:/data/pictures
-      - ${TVSHOWS_DIR}:/data/tvshows
+      - movies:/data/movies
+      - photos:/data/pictures
+      - tvshows:/data/tvshows
+      - music:/data/music
+      - books:/data/books
     labels:
       - "traefik.http.services.jellyfin.loadbalancer.server.port=8096"
       - "traefik.docker.network=web"
@@ -297,10 +251,124 @@ services:
       - "com.centurylinklabs.watchtower.enable=true"
       - "domain-base=${DOMAIN_BASE}"
     restart: unless-stopped
+
+  sonarr:
+    image: ghcr.io/linuxserver/sonarr:latest
+    container_name: sonarr
+    depends_on:
+      - traefik
+      - jackett
+      - torrent
+      - login
+    networks:
+      - web
+    ports:
+      - 8989:8989
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - ${PERSISTENT_DIR}/sonarr/config:/config
+      - ${DOWNLOAD_DIR}:/downloads
+      - tvshows:/tvshows
+      - ${TRANSCODES_DIR}:/transcodes
+    labels:
+      - "traefik.http.services.sonarr.loadbalancer.server.port=8989"
+      - "traefik.http.routers.sonarr-secured.middlewares=authelia@docker"
+      - "traefik.docker.network=web"
+      - "traefik.enable=true"
+      - "com.centurylinklabs.watchtower.enable=true"
+      - "domain-base=${DOMAIN_BASE}"
+    restart: unless-stopped
+
+  radarr:
+    image: ghcr.io/linuxserver/radarr:latest
+    container_name: radarr
+    depends_on:
+      - traefik
+      - jackett
+      - torrent
+      - login
+    networks:
+      - web
+    ports:
+      - 7878:7878
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - ${PERSISTENT_DIR}/radarr/config:/config
+      - ${DOWNLOAD_DIR}:/downloads
+      - movies:/movies
+      - ${TRANSCODES_DIR}:/transcodes
+    labels:
+      - "traefik.http.services.radarr.loadbalancer.server.port=7878"
+      - "traefik.http.routers.radarr-secured.middlewares=authelia@docker"
+      - "traefik.docker.network=web"
+      - "traefik.enable=true"
+      - "com.centurylinklabs.watchtower.enable=true"
+      - "domain-base=${DOMAIN_BASE}"
+    restart: unless-stopped
     
+  bazarr:
+    image: ghcr.io/linuxserver/bazarr:latest
+    container_name: bazarr
+    depends_on:
+      - traefik
+      - login
+    networks:
+      - web
+    ports:
+      - 6767:6767
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - ${PERSISTENT_DIR}/bazarr/config:/config
+      - movies:/movies
+      - tvshows:/tvshows
+    labels:
+      - "traefik.http.services.bazarr.loadbalancer.server.port=6767"
+      - "traefik.http.routers.bazarr-secured.middlewares=authelia@docker"
+      - "traefik.docker.network=web"
+      - "traefik.enable=true"
+      - "com.centurylinklabs.watchtower.enable=true"
+      - "domain-base=${DOMAIN_BASE}"
+    restart: unless-stopped
+
 networks:
   web:
     external: true
   dockersock-traefik-proxy:
   default:
     driver: bridge
+
+volumes:
+  tvshows:
+    driver_opts:
+      type: "nfs"
+      o: "addr=${SHARE_IP},rw"
+      device: ":${TVSHOWS_DIR}"
+  movies:
+    driver_opts:
+      type: "nfs"
+      o: "addr=${SHARE_IP},rw"
+      device: ":${MOVIES_DIR}"
+  photos:
+    driver_opts:
+      type: "nfs"
+      o: "addr=${SHARE_IP},rw"
+      device: ":${PHOTO_DIR}"
+  music:
+    driver_opts:
+      type: "nfs"
+      o: "addr=${SHARE_IP},rw"
+      device: ":${MUSIC_DIR}"
+  books:
+    driver_opts:
+      type: "nfs"
+      o: "addr=${SHARE_IP},rw"
+      device: ":${BOOKS_DIR}"
